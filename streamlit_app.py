@@ -1,151 +1,74 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import json
+from io import StringIO
 
-# Set the title and favicon that appear in the Browser's tab bar.
+# -----------------------------
+# Default keyword dictionaries
+# -----------------------------
+DEFAULT_DICTIONARIES = {
+    "urgency_marketing": [
+        "limited", "limited time", "limited run", "limited edition", "order now",
+        "last chance", "hurry", "while supplies last", "before they're gone",
+        "selling out", "selling fast", "act now", "don't wait", "today only",
+        "expires soon", "final hours", "almost gone"
+    ],
+    "exclusive_marketing": [
+        "exclusive", "exclusively", "exclusive offer", "exclusive deal",
+        "members only", "vip", "special access", "invitation only",
+        "premium", "privileged", "limited access", "select customers",
+        "insider", "private sale", "early access"
+    ]
+}
+
 st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+    page_title="Marketing Statement Classifier",
+    page_icon="📣",
+    layout="centered",
 )
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
-
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
-
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
+st.title("📣 Marketing Statement Classifier")
+st.markdown(
     """
+    Upload a CSV file containing a **`Statement`** column, then fine-tune the keyword dictionaries to classify each
+    statement into one or more marketing categories.
+    """
+)
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+# ------------------------------------------------------------------
+# Sidebar – step 1: dataset upload
+# ------------------------------------------------------------------
+with st.sidebar:
+    st.header("1️⃣ Upload dataset")
+    csv_file = st.file_uploader("CSV file (must include a 'Statement' column)", type=["csv"])
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+    st.header("2️⃣ Configure dictionaries")
+    st.caption("Edit the JSON below to add, remove, or rename categories and keywords.")
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+    # Display dictionaries as pretty-printed JSON for editing
+    dict_json = st.text_area(
+        "Dictionaries (JSON)",
+        value=json.dumps(DEFAULT_DICTIONARIES, indent=2),
+        height=300,
     )
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    if st.button("Apply changes"):
+        try:
+            user_dict = json.loads(dict_json)
+            # Convert lists to sets for faster lookup
+            DICTIONARIES = {k: set(map(str.lower, v)) for k, v in user_dict.items()}
+            st.success("Dictionaries updated!")
+        except Exception as e:
+            st.error(f"❌ Invalid JSON: {e}")
+            DICTIONARIES = {k: set(v) for k, v in DEFAULT_DICTIONARIES.items()}
+    else:
+        DICTIONARIES = {k: set(v) for k, v in DEFAULT_DICTIONARIES.items()}
 
-    return gdp_df
+# ------------------------------------------------------------------
+# Main app – process and display results
+# ------------------------------------------------------------------
+if csv_file is None:
+    st.info("⬅️ Upload a CSV file to get started.")
+    st.stop()
 
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# Read CSV i
